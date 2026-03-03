@@ -12,18 +12,12 @@ terraform {
 provider "azurerm" {
   features {}
 
-  # NOTE:
-  # We intentionally do NOT set subscription details here, as you are not
-  # expected to run `terraform apply` for this exercise.
-  #
-  # In a real setup you might set:
-  # - subscription_id
-  # - tenant_id
-  # - client_id / client_secret (or use managed identities)
+  # Authentication intentionally omitted for this exercise.
+  # In production this would use managed identity or CI/CD OIDC.
 }
 
 locals {
-  # Map environment to realm, used for naming and tags.
+  # Map environment to realm for consistent naming.
   realm_by_env = {
     dev  = "shire"
     prod = "gondor"
@@ -31,6 +25,7 @@ locals {
 
   realm = local.realm_by_env[var.environment]
 
+  # Common governance tags
   common_tags = merge(
     var.tags,
     {
@@ -45,10 +40,10 @@ locals {
 # -----------------------------
 
 resource "azurerm_resource_group" "middleearth" {
+  # Environment-specific RG to prevent clashes
   name     = "rg-${var.project_name}-${var.environment}"
   location = var.location
-
-  tags = local.common_tags
+  tags     = local.common_tags
 }
 
 # -----------------------------
@@ -58,15 +53,14 @@ resource "azurerm_resource_group" "middleearth" {
 resource "azurerm_virtual_network" "middleearth" {
   name                = "vnet-${local.realm}-${var.environment}"
   resource_group_name = azurerm_resource_group.middleearth.name
+  location            = azurerm_resource_group.middleearth.location
 
-  # FIXME: Make sure this address space is sensible and can be split
-  # for multiple subnets and environments (dev/prod).
-  address_space = [
-    "10.10.0.0/16"
-  ]
+  
+  # Replaced hardcoded CIDR with environment-specific mapping
+  # Prevent IP conflicts between dev and prod
+  address_space = var.vnet_address_space[var.environment]
 
-  location = azurerm_resource_group.middleearth.location
-  tags     = local.common_tags
+  tags = local.common_tags
 }
 
 resource "azurerm_subnet" "shire_app" {
@@ -74,11 +68,10 @@ resource "azurerm_subnet" "shire_app" {
   resource_group_name  = azurerm_resource_group.middleearth.name
   virtual_network_name = azurerm_virtual_network.middleearth.name
 
-  # FIXME: Ensure this subnet is a valid subset of the VNet address space.
-  # Current value is intentionally suspicious.
-  address_prefixes = [
-    "10.20.1.0/24"
-  ]
+  
+  # Fixed invalid subnet (previously outside VNet range)
+  # Now mapped per environment
+  address_prefixes = var.subnet_address_prefix[var.environment]
 }
 
 # -----------------------------
@@ -89,8 +82,7 @@ resource "azurerm_app_service_plan" "shire_plan" {
   name                = "asp-${local.realm}-${var.environment}"
   resource_group_name = azurerm_resource_group.middleearth.name
   location            = azurerm_resource_group.middleearth.location
-
-  kind = "Linux"
+  kind                = "Linux"
 
   sku {
     tier = "Basic"
@@ -106,13 +98,15 @@ resource "azurerm_app_service" "shire_api" {
   location            = azurerm_resource_group.middleearth.location
   app_service_plan_id = azurerm_app_service_plan.shire_plan.id
 
-  # FIXME: For security, review whether HTTPS-only should be enabled.
-  https_only = false
+  
+  # Enforced HTTPS to improve baseline security
+  https_only = true
 
   site_config {
     linux_fx_version = "DOTNETCORE|8.0"
   }
 
+  # Using system-assigned identity (will wire in Step 2)
   identity {
     type = "SystemAssigned"
   }
@@ -121,31 +115,23 @@ resource "azurerm_app_service" "shire_api" {
     "WEBSITE_RUN_FROM_PACKAGE" = "1"
     "REALM"                    = local.realm
     "ENVIRONMENT"              = var.environment
-    # TODO: In a real setup, secrets would come from Key Vault.
-    # e.g. "ConnectionStrings__Database" retrieved via Key Vault reference.
   }
 
   tags = local.common_tags
 }
 
 # -----------------------------
-# Managed Identity (optional)
+# Managed Identity (placeholder)
 # -----------------------------
 
-# NOTE:
-# We include this as a placeholder for a user-assigned identity if you
-# prefer that pattern. You can either:
-#  - Complete and use this identity with App Service, OR
-#  - Stick to the system-assigned identity on the App Service.
-#
-# In either case, make sure the Key Vault access policy is correct.
-
+# Placeholder user-assigned identity.
+# Currently not attached to the App Service.
+# System-assigned identity is used for simplicity
 resource "azurerm_user_assigned_identity" "shire_api" {
   name                = "uai-${local.realm}-api-${var.environment}"
   resource_group_name = azurerm_resource_group.middleearth.name
   location            = azurerm_resource_group.middleearth.location
-
-  tags = local.common_tags
+  tags                = local.common_tags
 }
 
 # -----------------------------

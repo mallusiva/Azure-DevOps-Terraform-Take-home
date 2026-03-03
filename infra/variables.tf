@@ -30,3 +30,31 @@ variable "tags" {
     cost_centre = "fellowship"
   }
 }
+
+# -----------------------------------------
+# Environment-specific networking settings
+# -----------------------------------------
+# This is to prevent IP conflicts between dev and prod
+# and Separate CIDR ranges per environment 
+
+variable "vnet_address_space" {
+  description = "VNet CIDR range per environment."
+  type        = map(list(string))
+
+  default = {
+    dev  = ["10.10.0.0/16"]
+    prod = ["10.20.0.0/16"]
+  }
+}
+
+# Environment-specific subnet ranges
+# this is to ensure subnet is valid within respective VNet
+variable "subnet_address_prefix" {
+  description = "Subnet CIDR per environment."
+  type        = map(list(string))
+
+  default = {
+    dev  = ["10.10.1.0/24"]
+    prod = ["10.20.1.0/24"]
+  }
+}
