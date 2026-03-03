@@ -11,10 +11,14 @@ terraform {
 
 provider "azurerm" {
   features {}
+  
 
   # Authentication intentionally omitted for this exercise.
   # In production this would use managed identity or CI/CD OIDC.
 }
+# Dynamically retrieves tenant and subscription information.
+# Avoids hardcoding tenant_id in Key Vault configuration.
+data "azurerm_client_config" "current" {}
 
 locals {
   # Map environment to realm for consistent naming.
@@ -106,7 +110,7 @@ resource "azurerm_app_service" "shire_api" {
     linux_fx_version = "DOTNETCORE|8.0"
   }
 
-  # Using system-assigned identity (will wire in Step 2)
+  # Using system-assigned identity for secure Key Vault access
   identity {
     type = "SystemAssigned"
   }
@@ -137,20 +141,21 @@ resource "azurerm_user_assigned_identity" "shire_api" {
 # -----------------------------
 # Key Vault (One Ring)
 # -----------------------------
-
 resource "azurerm_key_vault" "one_ring" {
   name                = "kv-${local.realm}-one-ring-${var.environment}"
   resource_group_name = azurerm_resource_group.middleearth.name
   location            = azurerm_resource_group.middleearth.location
 
-  # FIXME: Choose an appropriate SKU for this scenario.
+  # Standard SKU suitable for this scenario (non-HSM).
   sku_name = "standard"
 
-  tenant_id = "00000000-0000-0000-0000-000000000000" # FIXME: placeholder – how would this be handled in real code?
+  # Removed hardcoded tenant_id.
+  # Now dynamically retrieved from current Azure context.
+  tenant_id = data.azurerm_client_config.current.tenant_id
 
-  # FIXME: Restrict network access sensibly (no wide-open pattern).
-  # For this exercise, you may leave this as-is, but describe what you
-  # would do in a real environment in QUESTIONS.md.
+  # Disable public network access to improve security posture.
+  # In production this would typically allow only private endpoints.
+  public_network_access_enabled = false
 
   purge_protection_enabled   = false
   soft_delete_retention_days = 7
@@ -158,36 +163,18 @@ resource "azurerm_key_vault" "one_ring" {
   tags = local.common_tags
 }
 
-# TODO:
-# Wire up an access policy so that the shire-api can read secrets using its
-# managed identity (system- or user-assigned). You may choose one approach
-# and implement it.
+# Grant App Service managed identity permission to read secrets.
+# Uses system-assigned identity from the App Service.
+resource "azurerm_key_vault_access_policy" "shire_api" {
+  key_vault_id = azurerm_key_vault.one_ring.id
 
-# Example (incomplete, for you to fix/finish):
-#
-# resource "azurerm_key_vault_access_policy" "shire_api" {
-#   key_vault_id = azurerm_key_vault.one_ring.id
-#
-#   tenant_id = azurerm_key_vault.one_ring.tenant_id
-#   object_id = azurerm_app_service.shire_api.identity[0].principal_id
-#
-#   secret_permissions = [
-#     "Get",
-#     "List"
-#   ]
-# }
+  tenant_id = data.azurerm_client_config.current.tenant_id
 
-# -----------------------------
-# Hints for dev/prod split
-# -----------------------------
-#
-# - Currently, this configuration assumes a single environment via var.environment.
-# - For this exercise, you can:
-#   - Use different values of var.environment (dev/prod) with separate state files, OR
-#   - Introduce a simple pattern using for_each or modules.
-#
-# - We are not prescribing one “correct” solution; we are interested in your reasoning.
-#
-# TODO:
-#  - Extend this configuration so that a prod (Gondor) environment can be defined
-#    alongside dev (Shire) with minimal duplication and sensible naming.
+  # Uses system-assigned identity principal ID.
+  object_id = azurerm_app_service.shire_api.identity[0].principal_id
+
+  secret_permissions = [
+    "Get",
+    "List"
+  ]
+}
